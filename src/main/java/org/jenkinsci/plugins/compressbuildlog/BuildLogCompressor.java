@@ -19,7 +19,9 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
+import java.util.zip.ZipException;
 
 public class BuildLogCompressor extends JobProperty<AbstractProject<?, ?>> {
 
@@ -82,11 +84,24 @@ public class BuildLogCompressor extends JobProperty<AbstractProject<?, ?>> {
         
         @Override
         public void onFinalized(Run run) {
+            FileInputStream fis = null;
+            FileOutputStream fos = null;
+            GZIPInputStream zis = null;
+            GZIPOutputStream gzos = null;
             File log = run.getLogFile();
-            if (log.getName().endsWith(".gz")) {
+            File parentFile = log.getParentFile();
+
+            try {
+                fis = new FileInputStream(log);
+                zis = new GZIPInputStream(fis);
+                IOUtils.closeQuietly(zis);
                 // ignore already compressed log
                 LOGGER.log(Level.FINER, String.format("Skipping %s because the log is already compressed", run));
                 return;
+            } catch (IOException ioe) {
+                LOGGER.log(Level.FINER, String.format("%s is not a gzip file, attempting to compress %s", log.getName(), log.getPath()));
+            } finally {
+                IOUtils.closeQuietly(zis);
             }
 
             if (!hasBuildCompressorConfigured(run)) {
@@ -99,14 +114,9 @@ public class BuildLogCompressor extends JobProperty<AbstractProject<?, ?>> {
             if (log.getName().equals("log")) {
                 LOGGER.log(Level.FINE, String.format("Compressing build log of %s", run));
 
-                // regular, expected log file
-                FileInputStream fis = null;
-                FileOutputStream fos = null;
-                GZIPOutputStream gzos = null;
-
                 try {
                     fis = new FileInputStream(log);
-                    fos = new FileOutputStream(new File(log.getParentFile(), gzippedLogName));
+                    fos = new FileOutputStream(new File(parentFile, gzippedLogName));
                     gzos = new GZIPOutputStream(fos);
                     int copiedBytes = IOUtils.copy(fis, gzos);
 
@@ -129,11 +139,13 @@ public class BuildLogCompressor extends JobProperty<AbstractProject<?, ?>> {
                 if (!log.delete()) {
                     LOGGER.log(Level.WARNING, String.format("Failed to delete build log of %s after compression", run));
                 }
+
+                if (!new File(parentFile, gzippedLogName).renameTo(new File(parentFile, "log"))) {
+                    LOGGER.log(Level.WARNING, String.format("Failed to rename %s to log", gzippedLogName));
+                }
             }
         }
 
         private static final Logger LOGGER = Logger.getLogger(CompressBuildlogRunListener.class.getName());
     }
-
-
 }
